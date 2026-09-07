@@ -1,6 +1,6 @@
 {
   "name": "@lll9p/pi-anyrouter",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "Unofficial pi provider extension for AnyRouter Claude Code and Codex Responses Lite routes",
