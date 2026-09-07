@@ -50,7 +50,7 @@ This package selects an adapter by model family:
 Clone into a normal directory:
 
 ```bash
-git clone https://github.com/xifan2333/pi-anyrouter.git
+git clone https://github.com/lll9p/pi-anyrouter.git
 cd pi-anyrouter
 ```
 
@@ -71,13 +71,13 @@ pi install /absolute/path/to/pi-anyrouter
 Once pushed to GitHub, install with:
 
 ```bash
-pi install git:github.com/xifan2333/pi-anyrouter
+pi install git:github.com/lll9p/pi-anyrouter
 ```
 
 Or pin a ref/tag:
 
 ```bash
-pi install git:github.com/xifan2333/pi-anyrouter@<tag>
+pi install git:github.com/lll9p/pi-anyrouter@<tag>
 ```
 
 ## Option C: manual extension placement
@@ -204,7 +204,7 @@ This repo is already structured as a pi package through `package.json`:
 That means users can install it with:
 
 ```bash
-pi install git:github.com/xifan2333/pi-anyrouter
+pi install git:github.com/lll9p/pi-anyrouter
 ```
 
 ## Publish checklist
@@ -216,7 +216,7 @@ git init
 git add .
 git commit -m "feat: add AnyRouter Claude and Codex adapters"
 git branch -M main
-git remote add origin git@github.com:xifan2333/pi-anyrouter.git
+git remote add origin git@github.com:lll9p/pi-anyrouter.git
 git push -u origin main
 ```
 
