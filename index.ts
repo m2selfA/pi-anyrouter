@@ -84,8 +84,8 @@ function toClaudeCodeName(name?: string | null) {
   return NAME_MAP[name.toLowerCase()] ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function fromClaudeCodeName(name?: string | null) {
-  if (!name || typeof name !== "string") return name;
+function fromClaudeCodeName(name?: string | null): string {
+  if (!name || typeof name !== "string") return name ?? "";
   const lower = name.toLowerCase();
   for (const [from, to] of Object.entries(NAME_MAP)) {
     if (to.toLowerCase() === lower) return from;
