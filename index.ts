@@ -373,6 +373,7 @@ function createEmptyUsage() {
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
+    reasoning: undefined as number | undefined,
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
@@ -397,6 +398,9 @@ function updateUsageFromAnthropic(output: AssistantMessage, usage: any, model: M
   if (usage?.output_tokens != null) output.usage.output = usage.output_tokens;
   if (usage?.cache_read_input_tokens != null) output.usage.cacheRead = usage.cache_read_input_tokens;
   if (usage?.cache_creation_input_tokens != null) output.usage.cacheWrite = usage.cache_creation_input_tokens;
+  // Anthropic reports thinking tokens under cache_read_input_tokens in some responses,
+  // but the explicit thinking_tokens field (when present) is the authoritative source.
+  if (usage?.thinking_tokens != null) output.usage.reasoning = usage.thinking_tokens;
   output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
   calculateCost(model, output.usage);
 }
@@ -404,7 +408,8 @@ function updateUsageFromAnthropic(output: AssistantMessage, usage: any, model: M
 function resetOutputState(output: AssistantMessage) {
   output.content = [];
   output.usage = createEmptyUsage();
-  output.stopReason = "stop";
+  output.stopReason = "pending";
+  output.timestamp = Date.now();
   output.errorMessage = undefined;
   output.responseId = undefined;
 }
@@ -572,6 +577,7 @@ function applyCodexUsage(output: AssistantMessage, response: any, model: Model<A
   output.usage.output = usage.output_tokens || 0;
   output.usage.cacheRead = cached;
   output.usage.cacheWrite = cacheWrite;
+  if (usage.output_tokens_details?.reasoning_tokens != null) output.usage.reasoning = usage.output_tokens_details.reasoning_tokens;
   output.usage.totalTokens = usage.total_tokens || output.usage.input + output.usage.output + cached + cacheWrite;
   calculateCost(model, output.usage);
 }
@@ -648,25 +654,30 @@ function applyCodexSsePayload(payload: any, output: AssistantMessage, stream: As
   }
 }
 
-async function tryStreamAnyRouterCodex(url: string, body: Json, apiKey: string, model: Model<Api>, output: AssistantMessage, stream: AssistantMessageEventStream, sessionId: string, metadata: ReturnType<typeof createCodexMetadata>, signal?: AbortSignal) {
+async function tryStreamAnyRouterCodex(url: string, body: Json, apiKey: string, model: Model<Api>, output: AssistantMessage, stream: AssistantMessageEventStream, sessionId: string, metadata: ReturnType<typeof createCodexMetadata>, options?: SimpleStreamOptions) {
   const bodyText = JSON.stringify(body);
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || "10") || 0);
+  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
   let response: Response | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const headers = createCodexHeaders(apiKey, sessionId, metadata);
     if (attempt === 0) writeDebugFile("request", model.id, undefined, { url, headers: redactHeaders(headers), body, transport: "codex-sse" });
     try {
-      response = await fetchWithProxy(url, { method: "POST", signal, headers, body: bodyText });
+      response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: bodyText });
     } catch (error) {
-      if (attempt < maxRetries && !signal?.aborted) {
+      if (attempt < maxRetries && !options?.signal?.aborted) {
         await delay(getRetryDelayMs(attempt));
         continue;
       }
       throw error;
     }
 
-    if (response.ok && (response.headers.get("content-type") || "").includes("text/event-stream")) break;
+    if (response.ok && (response.headers.get("content-type") || "").includes("text/event-stream")) {
+      if (options?.onResponse) {
+        await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+      }
+      break;
+    }
     const raw = await response.text();
     const parsed = tryParseJson(raw) || { raw };
     const requestId = extractRequestId(parsed, response.headers);
@@ -896,10 +907,10 @@ function applySsePayloadEvent(payload: any, output: AssistantMessage, stream: As
   }
 }
 
-async function tryStreamAnyRouterCc(url: string, body: Json, apiKey: string, model: Model<Api>, output: AssistantMessage, stream: AssistantMessageEventStream, sessionId: string, signal?: AbortSignal) {
+async function tryStreamAnyRouterCc(url: string, body: Json, apiKey: string, model: Model<Api>, output: AssistantMessage, stream: AssistantMessageEventStream, sessionId: string, options?: SimpleStreamOptions) {
   const requestBody = { ...body, stream: true };
   const bodyText = JSON.stringify(requestBody);
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || "10") || 0);
+  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
   let response: Response | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -917,12 +928,12 @@ async function tryStreamAnyRouterCc(url: string, body: Json, apiKey: string, mod
     try {
       response = await fetchWithProxy(url, {
         method: "POST",
-        signal,
+        signal: options?.signal,
         headers,
         body: bodyText,
       });
     } catch (error) {
-      if (attempt < maxRetries && !signal?.aborted) {
+      if (attempt < maxRetries && !options?.signal?.aborted) {
         await delay(getRetryDelayMs(attempt));
         continue;
       }
@@ -930,7 +941,12 @@ async function tryStreamAnyRouterCc(url: string, body: Json, apiKey: string, mod
     }
 
     const contentType = response.headers.get("content-type") || "";
-    if (response.ok && contentType.includes("text/event-stream")) break;
+    if (response.ok && contentType.includes("text/event-stream")) {
+      if (options?.onResponse) {
+        await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+      }
+      break;
+    }
 
     const raw = await response.text();
     const parsed = tryParseJson(raw) || { raw };
@@ -1013,8 +1029,8 @@ async function tryStreamAnyRouterCc(url: string, body: Json, apiKey: string, mod
   });
 }
 
-async function postJson(url: string, body: Json, apiKey: string, modelId: string, sessionId: string, signal?: AbortSignal) {
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || "10") || 0);
+async function postJson(url: string, body: Json, apiKey: string, modelId: string, sessionId: string, model: Model<Api>, options?: SimpleStreamOptions) {
+  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
   const bodyText = JSON.stringify(body);
   let lastErrorText = "";
 
@@ -1032,7 +1048,7 @@ async function postJson(url: string, body: Json, apiKey: string, modelId: string
     try {
       response = await fetchWithProxy(url, {
         method: "POST",
-        signal,
+        signal: options?.signal,
         headers,
         body: bodyText,
       });
@@ -1067,7 +1083,12 @@ async function postJson(url: string, body: Json, apiKey: string, modelId: string
       maxRetries,
     });
 
-    if (response.ok) return parsed;
+    if (response.ok) {
+      if (options?.onResponse) {
+        await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+      }
+      return parsed;
+    }
     if (attempt < maxRetries && isRetryableStatus(response.status)) {
       await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))));
       continue;
@@ -1088,39 +1109,44 @@ function streamAnyRouterCc(model: Model<Api>, context: Context, options?: Simple
       provider: model.provider,
       model: model.id,
       usage: createEmptyUsage(),
-      stopReason: "stop",
+      stopReason: "pending",
       timestamp: Date.now(),
     };
 
     try {
       const source = loadSourceProvider();
+      const apiKey = options?.apiKey || source.apiKey;
       const sessionId = randomUUID();
 
       const configuredModel = source.models.find((item) => item.id === model.id);
       if (isCodexModel(model.id, configuredModel?.api)) {
         const turnId = randomUUID();
         const metadata = createCodexMetadata(sessionId, turnId);
-        const codexBody = buildCodexRequestBody(model, context, options, sessionId, metadata);
+        let codexBody: Json = buildCodexRequestBody(model, context, options, sessionId, metadata);
+        if (options?.onPayload) {
+          const replaced = await options.onPayload(codexBody, model);
+          if (replaced !== undefined) codexBody = replaced as Json;
+        }
         stream.push({ type: "start", partial: output });
         await tryStreamAnyRouterCodex(
           getCodexResponsesUrl(source.baseUrl),
           codexBody,
-          source.apiKey,
+          apiKey,
           model,
           output,
           stream,
           sessionId,
           metadata,
-          options?.signal,
+          options,
         );
         if (options?.signal?.aborted) throw new Error("Request was aborted");
-        stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+        stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
         stream.end();
         return;
       }
 
       const url = `${source.baseUrl.replace(/\/$/, "")}/v1/messages?beta=true`;
-      const requestBody: Json = {
+      let requestBody: Json = {
         model: model.id,
         messages: convertMessages(context.messages),
         max_tokens: options?.maxTokens || model.maxTokens || 32000,
@@ -1136,22 +1162,23 @@ function streamAnyRouterCc(model: Model<Api>, context: Context, options?: Simple
         requestBody.thinking = { type: "adaptive", display: "omitted" };
         requestBody.output_config = { effort: mapReasoningEffort(options.reasoning) };
       }
+      if (options?.onPayload) {
+        const replaced = await options.onPayload(requestBody, model);
+        if (replaced !== undefined) requestBody = replaced as Json;
+      }
 
       stream.push({ type: "start", partial: output });
 
       const streamMode = getStreamMode();
       if (streamMode !== "off") {
         try {
-          await tryStreamAnyRouterCc(url, requestBody, source.apiKey, model, output, stream, sessionId, options?.signal);
+          await tryStreamAnyRouterCc(url, requestBody, apiKey, model, output, stream, sessionId, options);
           if (options?.signal?.aborted) throw new Error("Request was aborted");
-          stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+          stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
           stream.end();
           return;
         } catch (streamError) {
           if (streamMode === "force" || output.content.length > 0) {
-            // All retries exhausted. Push a text block with the error so pi
-            // shows it, then end with done/stop to prevent pi from auto-retrying
-            // the entire provider stream.
             const errText = `[anyrouter] ${streamError instanceof Error ? streamError.message : String(streamError)}`;
             const contentIndex = output.content.length;
             output.content.push({ type: "text", text: errText } as any);
@@ -1172,9 +1199,9 @@ function streamAnyRouterCc(model: Model<Api>, context: Context, options?: Simple
         }
       }
 
-      const response = await postJson(url, requestBody, source.apiKey, model.id, sessionId, options?.signal);
+      const response = await postJson(url, requestBody, apiKey, model.id, sessionId, model, options);
       applyJsonResponseToOutput(response, output, stream, model);
-      stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
+      stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse" | "deferred", message: output });
       stream.end();
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
