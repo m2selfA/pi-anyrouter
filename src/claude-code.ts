@@ -409,7 +409,7 @@ export async function tryStreamAnyRouterCc(
       });
     } catch (error) {
       if (attempt < maxRetries && !options?.signal?.aborted) {
-        await delay(getRetryDelayMs(attempt));
+        await delay(getRetryDelayMs(attempt), options?.signal);
         continue;
       }
       throw error;
@@ -438,7 +438,7 @@ export async function tryStreamAnyRouterCc(
         stream.push({ type: "text_start", contentIndex: retryBlockIndex, partial: output });
         stream.push({ type: "text_delta", contentIndex: retryBlockIndex, delta: retryText, partial: output });
         stream.push({ type: "text_end", contentIndex: retryBlockIndex, content: retryText, partial: output });
-        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))));
+        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
         continue;
       }
       throw new Error(raw || `HTTP ${response.status}`);
@@ -479,7 +479,7 @@ export async function tryStreamAnyRouterCc(
         stream.push({ type: "text_start", contentIndex: retryBlockIndex, partial: output });
         stream.push({ type: "text_delta", contentIndex: retryBlockIndex, delta: retryText, partial: output });
         stream.push({ type: "text_end", contentIndex: retryBlockIndex, content: retryText, partial: output });
-        await delay(getRetryDelayMs(attempt, error.retryAfterMs));
+        await delay(getRetryDelayMs(attempt, error.retryAfterMs), options?.signal);
         continue;
       }
       throw error;
@@ -516,7 +516,7 @@ export async function postJson(url: string, body: Json, apiKey: string, modelId:
       });
     } catch (error) {
       if (attempt < maxRetries) {
-        await delay(getRetryDelayMs(attempt));
+        await delay(getRetryDelayMs(attempt), options?.signal);
         continue;
       }
       throw error;
@@ -550,7 +550,7 @@ export async function postJson(url: string, body: Json, apiKey: string, modelId:
       return parsed;
     }
     if (attempt < maxRetries && isRetryableStatus(response.status)) {
-      await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))));
+      await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
       continue;
     }
     throw new Error(text || `HTTP ${response.status}`);

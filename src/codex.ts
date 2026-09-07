@@ -362,7 +362,7 @@ export async function tryStreamAnyRouterCodex(
       response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: bodyText });
     } catch (error) {
       if (attempt < maxRetries && !options?.signal?.aborted) {
-        await delay(getRetryDelayMs(attempt));
+        await delay(getRetryDelayMs(attempt), options?.signal);
         continue;
       }
       throw error;
@@ -375,7 +375,7 @@ export async function tryStreamAnyRouterCodex(
       const requestId = extractRequestId(parsed, response.headers);
       writeDebugFile("error", model.id, requestId, { status: response.status, requestId, body: parsed, raw, transport: "codex-sse", retryAttempt: attempt });
       if (attempt < maxRetries && isRetryableStatus(response.status)) {
-        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))));
+        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
         continue;
       }
       throw new Error(raw || `HTTP ${response.status}`);
@@ -404,7 +404,7 @@ export async function tryStreamAnyRouterCodex(
     } catch (error) {
       if (error instanceof RetryableStreamError && output.content.length === contentLenBefore && attempt < maxRetries && !options?.signal?.aborted) {
         writeDebugFile("error", model.id, undefined, { phase: "sse-stream-retry", errorMessage: error.message, retryAttempt: attempt, transport: "codex-sse" });
-        await delay(getRetryDelayMs(attempt, error.retryAfterMs));
+        await delay(getRetryDelayMs(attempt, error.retryAfterMs), options?.signal);
         continue;
       }
       throw error;

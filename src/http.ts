@@ -79,8 +79,22 @@ export function isRetryableErrorType(errorType: string | undefined): boolean {
   return !!errorType && RETRYABLE_ERROR_TYPES.has(errorType);
 }
 
-export function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function delay(ms: number, signal?: AbortSignal | null) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("Aborted"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new Error("Aborted"));
+      },
+      { once: true },
+    );
+  });
 }
 
 export function isRetryableStatus(status: number) {
