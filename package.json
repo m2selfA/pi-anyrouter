@@ -17,11 +17,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xifan2333/pi-anyrouter.git"
+    "url": "git+https://github.com/lll9p/pi-anyrouter.git"
   },
-  "homepage": "https://github.com/xifan2333/pi-anyrouter#readme",
+  "homepage": "https://github.com/lll9p/pi-anyrouter#readme",
   "bugs": {
-    "url": "https://github.com/xifan2333/pi-anyrouter/issues"
+    "url": "https://github.com/lll9p/pi-anyrouter/issues"
   },
   "files": [
     "index.ts",

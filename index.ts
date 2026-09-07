@@ -61,7 +61,7 @@ const STAINLESS_RUNTIME = "node";
 const STAINLESS_RUNTIME_VERSION = "v26.3.0";
 const ANTHROPIC_BETA = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24";
 const CLAUDE_DEVICE_ID = randomBytes(32).toString("hex");
-const CODEX_VERSION = "0.144.1";
+const CODEX_VERSION = "0.153.4";
 const CODEX_INSTALLATION_ID = randomUUID();
 
 const NAME_MAP: Record<string, string> = {
