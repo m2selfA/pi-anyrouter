@@ -41,7 +41,7 @@ function streamAnyRouterCc(model: Model<Api>, context: Context, options?: Simple
     try {
       const source = loadSourceProvider();
       const apiKey = options?.apiKey || source.apiKey;
-      const sessionId = randomUUID();
+      const sessionId = options?.sessionId || randomUUID();
 
       const configuredModel = source.models.find((item) => item.id === model.id);
       if (isCodexModel(model.id, configuredModel?.api)) {

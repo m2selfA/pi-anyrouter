@@ -11,19 +11,7 @@ import {
   type Tool,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import {
-  delay,
-  fetchWithProxy,
-  getRetryDelayMs,
-  isRetryableErrorType,
-  isRetryableStatus,
-  nextSseChunk,
-  parseRetryAfterMs,
-  parseSseEvent,
-  RetryableStreamError,
-  redactHeaders,
-  writeDebugFile,
-} from "./http.js";
+import { fetchWithProxy, nextSseChunk, parseSseEvent, redactHeaders, writeDebugFile } from "./http.js";
 import { CODEX_INSTALLATION_ID, CODEX_VERSION, type Json } from "./types.js";
 import { extractRequestId, mapReasoningEffort, sanitizeText, tryParseJson } from "./utils.js";
 
@@ -217,17 +205,10 @@ function applyCodexSsePayload(payload: any, output: AssistantMessage, stream: As
   const type = payload?.type;
   if (!type || type === "response.in_progress" || type === "response.metadata") return;
   if (type === "error") {
-    const errorType = payload.error?.type || payload.error?.code;
-    const message = payload.error?.message || payload.message || JSON.stringify(payload);
-    if (isRetryableErrorType(errorType)) throw new RetryableStreamError(message);
-    throw new Error(message);
+    throw new Error(payload.error?.message || payload.message || JSON.stringify(payload));
   }
   if (type === "response.failed") {
-    const err = payload.response?.error;
-    const message = err?.message || "Codex response failed";
-    const errorType = err?.type || err?.code;
-    if (isRetryableErrorType(errorType)) throw new RetryableStreamError(message);
-    throw new Error(message);
+    throw new Error(payload.response?.error?.message || "Codex response failed");
   }
 
   if (type === "response.created") {
@@ -350,66 +331,33 @@ export async function tryStreamAnyRouterCodex(
   metadata: ReturnType<typeof createCodexMetadata>,
   options?: SimpleStreamOptions,
 ) {
-  const bodyText = JSON.stringify(body);
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
+  const headers = createCodexHeaders(apiKey, sessionId, metadata);
+  writeDebugFile("request", model.id, undefined, { url, headers: redactHeaders(headers), body, transport: "codex-sse" });
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const headers = createCodexHeaders(apiKey, sessionId, metadata);
-    if (attempt === 0) writeDebugFile("request", model.id, undefined, { url, headers: redactHeaders(headers), body, transport: "codex-sse" });
+  const response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: JSON.stringify(body) });
 
-    let response: Response;
-    try {
-      response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: bodyText });
-    } catch (error) {
-      if (attempt < maxRetries && !options?.signal?.aborted) {
-        await delay(getRetryDelayMs(attempt), options?.signal);
-        continue;
-      }
-      throw error;
-    }
-
-    // HTTP-level error → retry if retryable status
-    if (!response.ok) {
-      const raw = await response.text();
-      const parsed = tryParseJson(raw) || { raw };
-      const requestId = extractRequestId(parsed, response.headers);
-      writeDebugFile("error", model.id, requestId, { status: response.status, requestId, body: parsed, raw, transport: "codex-sse", retryAttempt: attempt });
-      if (attempt < maxRetries && isRetryableStatus(response.status)) {
-        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
-        continue;
-      }
-      throw new Error(raw || `HTTP ${response.status}`);
-    }
-
-    if (!(response.headers.get("content-type") || "").includes("text/event-stream")) {
-      throw new Error(`stream response was not SSE (content-type=${response.headers.get("content-type") || "<missing>"})`);
-    }
-
-    if (options?.onResponse) {
-      await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
-    }
-
-    // Consume the SSE stream — retry on RetryableStreamError if no content was emitted
-    const contentLenBefore = output.content.length;
-    try {
-      const resp = await consumeCodexStream(response, output, stream, model);
-      writeDebugFile("response", model.id, resp.headers.get("x-oneapi-request-id") || undefined, {
-        status: resp.status,
-        responseId: output.responseId,
-        stopReason: output.stopReason,
-        usage: output.usage,
-        transport: "codex-sse",
-      });
-      return;
-    } catch (error) {
-      if (error instanceof RetryableStreamError && output.content.length === contentLenBefore && attempt < maxRetries && !options?.signal?.aborted) {
-        writeDebugFile("error", model.id, undefined, { phase: "sse-stream-retry", errorMessage: error.message, retryAttempt: attempt, transport: "codex-sse" });
-        await delay(getRetryDelayMs(attempt, error.retryAfterMs), options?.signal);
-        continue;
-      }
-      throw error;
-    }
+  if (!response.ok) {
+    const raw = await response.text();
+    const parsed = tryParseJson(raw) || { raw };
+    const requestId = extractRequestId(parsed, response.headers);
+    writeDebugFile("error", model.id, requestId, { status: response.status, requestId, body: parsed, raw, transport: "codex-sse" });
+    throw new Error(raw || `HTTP ${response.status}`);
   }
 
-  throw new Error("Codex request failed after retries");
+  if (!(response.headers.get("content-type") || "").includes("text/event-stream")) {
+    throw new Error(`stream response was not SSE (content-type=${response.headers.get("content-type") || "<missing>"})`);
+  }
+
+  if (options?.onResponse) {
+    await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+  }
+
+  const resp = await consumeCodexStream(response, output, stream, model);
+  writeDebugFile("response", model.id, resp.headers.get("x-oneapi-request-id") || undefined, {
+    status: resp.status,
+    responseId: output.responseId,
+    stopReason: output.stopReason,
+    usage: output.usage,
+    transport: "codex-sse",
+  });
 }

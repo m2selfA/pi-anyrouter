@@ -60,66 +60,6 @@ export function writeDebugFile(kind: "request" | "response" | "error", modelId: 
   writeFileSync(path, JSON.stringify(payload, null, 2), "utf8");
 }
 
-// ── Retry ───────────────────────────────────────────────────────────────────
-
-/** Thrown when an SSE stream delivers a retryable error (e.g. rate_limit) before any content was emitted. */
-export class RetryableStreamError extends Error {
-  constructor(
-    message: string,
-    public readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = "RetryableStreamError";
-  }
-}
-
-const RETRYABLE_ERROR_TYPES = new Set(["too_many_requests", "rate_limit_exceeded", "server_error", "overloaded_error", "api_error"]);
-
-export function isRetryableErrorType(errorType: string | undefined): boolean {
-  return !!errorType && RETRYABLE_ERROR_TYPES.has(errorType);
-}
-
-export function delay(ms: number, signal?: AbortSignal | null) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new Error("Aborted"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason ?? new Error("Aborted"));
-      },
-      { once: true },
-    );
-  });
-}
-
-export function isRetryableStatus(status: number) {
-  return [408, 409, 429, 500, 502, 503, 504, 520, 522, 524].includes(status);
-}
-
-export function parseRetryAfterMs(value: string | null) {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const at = Date.parse(value);
-  if (Number.isFinite(at)) {
-    const delta = at - Date.now();
-    return delta > 0 ? delta : 0;
-  }
-  return undefined;
-}
-
-export function getRetryDelayMs(attempt: number, retryAfterMs?: number) {
-  if (typeof retryAfterMs === "number") return Math.max(0, Math.min(retryAfterMs, 30_000));
-  const base = Math.min(1000 * 2 ** attempt, 15_000);
-  const jitter = Math.floor(Math.random() * 250);
-  return base + jitter;
-}
-
 // ── SSE parsing ─────────────────────────────────────────────────────────────
 
 export function parseSseEvent(chunk: string) {

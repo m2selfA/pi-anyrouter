@@ -11,19 +11,7 @@ import type {
   Tool,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import {
-  delay,
-  fetchWithProxy,
-  getRetryDelayMs,
-  isRetryableErrorType,
-  isRetryableStatus,
-  nextSseChunk,
-  parseRetryAfterMs,
-  parseSseEvent,
-  RetryableStreamError,
-  redactHeaders,
-  writeDebugFile,
-} from "./http.js";
+import { fetchWithProxy, nextSseChunk, parseSseEvent, redactHeaders, writeDebugFile } from "./http.js";
 import {
   ANTHROPIC_BETA,
   CLAUDE_CODE_VERSION,
@@ -211,11 +199,7 @@ function applySsePayloadEvent(
   if (!payload?.type || payload.type === "ping" || payload.type === "message_stop") return;
 
   if (payload.type === "error") {
-    const errorType = payload?.error?.type || payload?.error?.code;
-    const errorText = payload?.error?.message || payload?.error || payload?.message || JSON.stringify(payload);
-    const message = String(errorText);
-    if (isRetryableErrorType(errorType)) throw new RetryableStreamError(message);
-    throw new Error(message);
+    throw new Error(String(payload?.error?.message || payload?.error || payload?.message || JSON.stringify(payload)));
   }
 
   if (payload.type === "message_start") {
@@ -385,176 +369,80 @@ export async function tryStreamAnyRouterCc(
   options?: SimpleStreamOptions,
 ) {
   const requestBody = { ...body, stream: true };
-  const bodyText = JSON.stringify(requestBody);
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
+  const headers = getClaudeCodeHeaders(apiKey, 0, sessionId);
+  writeDebugFile("request", model.id, undefined, { url, headers: redactHeaders(headers), body: requestBody, transport: "sse" });
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const headers = getClaudeCodeHeaders(apiKey, 0, sessionId);
-    if (attempt === 0) {
-      writeDebugFile("request", model.id, undefined, {
-        url,
-        headers: redactHeaders(headers),
-        body: requestBody,
-        transport: "sse",
-      });
-    }
+  const response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: JSON.stringify(requestBody) });
 
-    let response: Response;
-    try {
-      response = await fetchWithProxy(url, {
-        method: "POST",
-        signal: options?.signal,
-        headers,
-        body: bodyText,
-      });
-    } catch (error) {
-      if (attempt < maxRetries && !options?.signal?.aborted) {
-        await delay(getRetryDelayMs(attempt), options?.signal);
-        continue;
-      }
-      throw error;
-    }
-
-    // HTTP-level error → retry if retryable status
-    if (!response.ok) {
-      const raw = await response.text();
-      const parsed = tryParseJson(raw) || { raw };
-      const requestId = extractRequestId(parsed, response.headers);
-      writeDebugFile("error", model.id, requestId, {
-        status: response.status,
-        statusText: response.statusText,
-        requestId,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: parsed,
-        raw,
-        transport: "sse",
-        retryAttempt: attempt,
-        maxRetries,
-      });
-      if (attempt < maxRetries && isRetryableStatus(response.status)) {
-        const retryBlockIndex = output.content.length;
-        const retryText = `⏳ ${response.status} — retrying (${attempt + 1}/${maxRetries})…`;
-        output.content.push({ type: "text", text: retryText } as any);
-        stream.push({ type: "text_start", contentIndex: retryBlockIndex, partial: output });
-        stream.push({ type: "text_delta", contentIndex: retryBlockIndex, delta: retryText, partial: output });
-        stream.push({ type: "text_end", contentIndex: retryBlockIndex, content: retryText, partial: output });
-        await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
-        continue;
-      }
-      throw new Error(raw || `HTTP ${response.status}`);
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text/event-stream")) {
-      if (response.ok) throw new Error(`stream response was not SSE (content-type=${contentType || "<missing>"})`);
-    }
-
-    if (options?.onResponse) {
-      await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
-    }
-
-    // Consume the SSE stream — retry on RetryableStreamError if no content was emitted
-    const contentLenBefore = output.content.length;
-    try {
-      const resp = await consumeCcStream(response, output, stream, model);
-      writeDebugFile("response", model.id, resp.headers.get("x-oneapi-request-id") || undefined, {
-        status: resp.status,
-        statusText: resp.statusText,
-        headers: Object.fromEntries(resp.headers.entries()),
-        body: {
-          responseId: output.responseId,
-          stopReason: output.stopReason,
-          usage: output.usage,
-          contentBlocks: output.content.length,
-        },
-        transport: "sse",
-      });
-      return;
-    } catch (error) {
-      if (error instanceof RetryableStreamError && output.content.length === contentLenBefore && attempt < maxRetries && !options?.signal?.aborted) {
-        writeDebugFile("error", model.id, undefined, { phase: "sse-stream-retry", errorMessage: error.message, retryAttempt: attempt, transport: "sse" });
-        const retryBlockIndex = output.content.length;
-        const retryText = `⏳ SSE error — retrying (${attempt + 1}/${maxRetries})…`;
-        output.content.push({ type: "text", text: retryText } as any);
-        stream.push({ type: "text_start", contentIndex: retryBlockIndex, partial: output });
-        stream.push({ type: "text_delta", contentIndex: retryBlockIndex, delta: retryText, partial: output });
-        stream.push({ type: "text_end", contentIndex: retryBlockIndex, content: retryText, partial: output });
-        await delay(getRetryDelayMs(attempt, error.retryAfterMs), options?.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw new Error("CC request failed after retries");
-}
-
-// ── JSON request ────────────────────────────────────────────────────────────
-
-export async function postJson(url: string, body: Json, apiKey: string, modelId: string, sessionId: string, model: Model<Api>, options?: SimpleStreamOptions) {
-  const maxRetries = Math.max(0, Number(process.env.PI_ANYROUTER_CC_MAX_RETRIES || options?.maxRetries || "10") || 0);
-  const bodyText = JSON.stringify(body);
-  let lastErrorText = "";
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const headers = getClaudeCodeHeaders(apiKey, attempt, sessionId);
-    if (attempt === 0) {
-      writeDebugFile("request", modelId, undefined, {
-        url,
-        headers: redactHeaders(headers),
-        body,
-      });
-    }
-
-    let response: Response;
-    try {
-      response = await fetchWithProxy(url, {
-        method: "POST",
-        signal: options?.signal,
-        headers,
-        body: bodyText,
-      });
-    } catch (error) {
-      if (attempt < maxRetries) {
-        await delay(getRetryDelayMs(attempt), options?.signal);
-        continue;
-      }
-      throw error;
-    }
-
-    const text = await response.text();
-    lastErrorText = text;
-    let parsed: any = {};
-    try {
-      parsed = text ? JSON.parse(text) : {};
-    } catch {
-      parsed = { raw: text };
-    }
-    const requestId = parsed?.error?.message?.match(/request id:\s*([^)]+)/i)?.[1] || response.headers.get("x-oneapi-request-id") || undefined;
-
-    writeDebugFile(response.ok ? "response" : "error", modelId, requestId, {
+  if (!response.ok) {
+    const raw = await response.text();
+    const parsed = tryParseJson(raw) || { raw };
+    const requestId = extractRequestId(parsed, response.headers);
+    writeDebugFile("error", model.id, requestId, {
       status: response.status,
       statusText: response.statusText,
       requestId,
       headers: Object.fromEntries(response.headers.entries()),
       body: parsed,
-      raw: text,
-      retryAttempt: attempt,
-      maxRetries,
+      raw,
+      transport: "sse",
     });
-
-    if (response.ok) {
-      if (options?.onResponse) {
-        await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
-      }
-      return parsed;
-    }
-    if (attempt < maxRetries && isRetryableStatus(response.status)) {
-      await delay(getRetryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after"))), options?.signal);
-      continue;
-    }
-    throw new Error(text || `HTTP ${response.status}`);
+    throw new Error(raw || `HTTP ${response.status}`);
   }
 
-  throw new Error(lastErrorText || "HTTP request failed after retries");
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("text/event-stream")) {
+    throw new Error(`stream response was not SSE (content-type=${contentType || "<missing>"})`);
+  }
+
+  if (options?.onResponse) {
+    await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+  }
+
+  const resp = await consumeCcStream(response, output, stream, model);
+  writeDebugFile("response", model.id, resp.headers.get("x-oneapi-request-id") || undefined, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: Object.fromEntries(resp.headers.entries()),
+    body: {
+      responseId: output.responseId,
+      stopReason: output.stopReason,
+      usage: output.usage,
+      contentBlocks: output.content.length,
+    },
+    transport: "sse",
+  });
+}
+
+// ── JSON request ────────────────────────────────────────────────────────────
+
+export async function postJson(url: string, body: Json, apiKey: string, modelId: string, sessionId: string, model: Model<Api>, options?: SimpleStreamOptions) {
+  const headers = getClaudeCodeHeaders(apiKey, 0, sessionId);
+  writeDebugFile("request", modelId, undefined, { url, headers: redactHeaders(headers), body });
+
+  const response = await fetchWithProxy(url, { method: "POST", signal: options?.signal, headers, body: JSON.stringify(body) });
+  const text = await response.text();
+  let parsed: any = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { raw: text };
+  }
+  const requestId = parsed?.error?.message?.match(/request id:\s*([^)]+)/i)?.[1] || response.headers.get("x-oneapi-request-id") || undefined;
+
+  writeDebugFile(response.ok ? "response" : "error", modelId, requestId, {
+    status: response.status,
+    statusText: response.statusText,
+    requestId,
+    headers: Object.fromEntries(response.headers.entries()),
+    body: parsed,
+    raw: text,
+  });
+
+  if (!response.ok) throw new Error(text || `HTTP ${response.status}`);
+
+  if (options?.onResponse) {
+    await options.onResponse({ status: response.status, headers: Object.fromEntries(response.headers.entries()) }, model);
+  }
+  return parsed;
 }
