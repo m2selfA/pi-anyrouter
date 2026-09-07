@@ -62,6 +62,23 @@ export function writeDebugFile(kind: "request" | "response" | "error", modelId: 
 
 // ── Retry ───────────────────────────────────────────────────────────────────
 
+/** Thrown when an SSE stream delivers a retryable error (e.g. rate_limit) before any content was emitted. */
+export class RetryableStreamError extends Error {
+  constructor(
+    message: string,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = "RetryableStreamError";
+  }
+}
+
+const RETRYABLE_ERROR_TYPES = new Set(["too_many_requests", "rate_limit_exceeded", "server_error", "overloaded_error", "api_error"]);
+
+export function isRetryableErrorType(errorType: string | undefined): boolean {
+  return !!errorType && RETRYABLE_ERROR_TYPES.has(errorType);
+}
+
 export function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
