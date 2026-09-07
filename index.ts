@@ -1202,6 +1202,7 @@ export default function (pi: ExtensionAPI) {
         name: model.name ? `${model.name} (AnyRouter)` : `${model.id} (AnyRouter)`,
         api: API_ID,
         reasoning: model.reasoning ?? true,
+        thinkingLevelMap: (model.reasoning ?? true) ? { off: "off", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" } : undefined,
         input: model.input ?? ["text"],
         cost: {
           input: model.cost?.input ?? 0,
