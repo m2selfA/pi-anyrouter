@@ -40,6 +40,7 @@ This package selects an adapter by model family:
 - Converts tool names to Claude Code naming
 - Supports reasoning via `thinking` + `output_config`
 - Built-in request/response debug dump
+- Supplies a four-tool Claude Code compatibility floor for sparse Pi contexts (while preserving real Pi tools)
 - Retries transient upstream failures like HTTP 520/502/503/504 automatically
 - Packaged so it can be shared as a pi package
 
@@ -182,7 +183,7 @@ Default debug output directory:
 
 If AnyRouter intermittently returns `HTTP 520` / `Origin Error`, this package retries transient upstream failures automatically with exponential backoff. You can tune the retry count with `PI_ANYROUTER_CC_MAX_RETRIES`.
 
-The runtime uses SSE by default (`PI_ANYROUTER_CC_STREAM_MODE=force`). For troubleshooting, you can force old behavior with:
+The runtime uses SSE by default (`PI_ANYROUTER_CC_STREAM_MODE=force`). AnyRouter's Claude Code route currently rejects sparse tool declarations; the adapter preserves configured Pi tools and adds compatibility schemas until four Claude-style tools are present. For troubleshooting, you can force old behavior with:
 
 ```bash
 PI_ANYROUTER_CC_STREAM_MODE=off pi --model anyrouter/claude-opus-4-8 -p "Reply with exactly OK"

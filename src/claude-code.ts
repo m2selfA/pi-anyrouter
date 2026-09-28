@@ -47,14 +47,17 @@ export function convertMessages(messages: Message[]) {
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         const text = sanitizeText(msg.content);
-        if (text.trim()) params.push({ role: "user", content: [{ type: "text", text }] });
+        if (text.trim()) params.push({ role: "user", content: text });
       } else {
         const blocks = msg.content.map((item) =>
           item.type === "text"
             ? { type: "text", text: sanitizeText(item.text) }
             : { type: "image", source: { type: "base64", media_type: item.mimeType, data: item.data } },
         );
-        if (blocks.length > 0) params.push({ role: "user", content: blocks });
+        if (blocks.length > 0) {
+          const content = blocks.length === 1 && blocks[0].type === "text" ? blocks[0].text : blocks;
+          params.push({ role: "user", content });
+        }
       }
       continue;
     }
@@ -102,6 +105,33 @@ export function convertMessages(messages: Message[]) {
   return params;
 }
 
+const FALLBACK_CLAUDE_CODE_TOOLS = [
+  {
+    name: "Read",
+    description: "Read a file from the working directory.",
+    input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "Write",
+    description: "Write content to a file in the working directory.",
+    input_schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+  },
+  {
+    name: "Edit",
+    description: "Replace text in a file in the working directory.",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" } },
+      required: ["path", "oldText", "newText"],
+    },
+  },
+  {
+    name: "Bash",
+    description: "Run a shell command.",
+    input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+  },
+] as const;
+
 export function convertTools(tools: Tool[]) {
   return tools.map((tool) => ({
     name: toClaudeCodeName(tool.name),
@@ -114,6 +144,22 @@ export function convertTools(tools: Tool[]) {
   }));
 }
 
+// AnyRouter's Claude Code route returns 429/520 for requests with fewer than
+// four Claude-style tools. Keep the fallback only for sparse/non-tool pi calls;
+// real pi tools are preserved and supplemented only until the route minimum.
+export function ensureClaudeCodeTools(tools?: Tool[]) {
+  const converted = tools?.length ? convertTools(tools) : [];
+  const names = new Set(converted.map((tool) => tool.name));
+  for (const fallback of FALLBACK_CLAUDE_CODE_TOOLS) {
+    if (converted.length >= FALLBACK_CLAUDE_CODE_TOOLS.length) break;
+    if (!names.has(fallback.name)) {
+      converted.push(fallback);
+      names.add(fallback.name);
+    }
+  }
+  return converted;
+}
+
 // ── Headers / metadata ──────────────────────────────────────────────────────
 
 export function getClaudeCodeHeaders(apiKey: string, retryCount = 0, sessionId: string) {
@@ -121,6 +167,7 @@ export function getClaudeCodeHeaders(apiKey: string, retryCount = 0, sessionId: 
     "content-type": "application/json",
     accept: "application/json",
     authorization: `Bearer ${apiKey}`,
+    "x-api-key": apiKey,
     "anthropic-version": "2023-06-01",
     "anthropic-dangerous-direct-browser-access": "true",
     "anthropic-beta": ANTHROPIC_BETA,

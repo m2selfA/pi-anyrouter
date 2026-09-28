@@ -12,9 +12,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   applyJsonResponseToOutput,
   convertMessages,
-  convertTools,
   createClaudeCodeMetadata,
   createClaudeCodeSystem,
+  ensureClaudeCodeTools,
   postJson,
   tryStreamAnyRouterCc,
 } from "./claude-code.js";
@@ -72,7 +72,7 @@ function streamAnyRouterCc(model: Model<Api>, context: Context, options?: Simple
           edits: [{ type: "clear_thinking_20251015", keep: "all" }],
         },
       };
-      if (context.tools?.length) requestBody.tools = convertTools(context.tools);
+      requestBody.tools = ensureClaudeCodeTools(context.tools);
       if (options?.reasoning && model.reasoning) {
         requestBody.thinking = { type: "adaptive", display: "omitted" };
         requestBody.output_config = { effort: mapReasoningEffort(options.reasoning) };
