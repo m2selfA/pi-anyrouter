@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convertMessages, ensureClaudeCodeTools, getClaudeCodeHeaders } from "../src/claude-code.js";
 import { nextSseChunk, parseSseEvent } from "../src/http.js";
+import { isCodexModel } from "../src/utils.js";
 
 test("normalizes a plain user message as Claude Code does", () => {
   assert.deepEqual(convertMessages([{ role: "user", content: "hello" }] as any), [{ role: "user", content: "hello" }]);
@@ -38,6 +39,13 @@ test("emits the captured Claude Code authentication and version headers", () => 
   assert.equal(headers["user-agent"], "claude-cli/2.1.281 (external, sdk-cli)");
   assert.equal(headers["x-stainless-package-version"], "0.112.1");
   assert.match(headers["anthropic-beta"], /per-turn-control-2026-07-01/);
+});
+
+test("routes gpt-6-astra-cc-format through the Claude Code messages adapter", () => {
+  assert.equal(isCodexModel("gpt-6-astra-cc-format"), false);
+  assert.equal(isCodexModel("gpt-5.6-sol"), true);
+  assert.equal(isCodexModel("gpt-6-astra-cc-format", "openai-codex-responses"), true);
+  assert.equal(isCodexModel("gpt-5.6-sol", "anthropic-messages"), false);
 });
 
 test("parses SSE frames when boundaries split through event data", () => {

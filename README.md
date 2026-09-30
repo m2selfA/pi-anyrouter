@@ -29,7 +29,7 @@ Some AnyRouter Claude endpoints, especially `claude-opus-4-6`, reject older or m
 
 This package selects an adapter by model family:
 
-- Claude models use `POST /v1/messages?beta=true` with Claude Code headers, system blocks, metadata, and Anthropic SSE conversion.
+- Claude models (including AnyRouter's `gpt-6-astra-cc-format`) use `POST /v1/messages?beta=true` with Claude Code headers, system blocks, metadata, and Anthropic SSE conversion.
 - Codex models use `POST /v1/responses` with the Codex Responses Lite headers/body shape and OpenAI Responses SSE conversion.
 
 ## Features
@@ -125,6 +125,21 @@ Example:
 }
 ```
 
+Add the GPT model exposed through AnyRouter's Claude Code/Anthropic Messages route as another entry:
+
+```json
+{
+  "id": "gpt-6-astra-cc-format",
+  "name": "GPT-6 Astra (Claude Code format)",
+  "reasoning": true,
+  "input": ["text"],
+  "contextWindow": 200000,
+  "maxTokens": 32000
+}
+```
+
+Model routing is automatic: IDs containing the `cc-format` marker use the Claude Code messages adapter even when they start with `gpt`; regular GPT/Codex IDs continue to use Responses Lite. You can explicitly force a route with `api: "anthropic-messages"` or `api: "openai-codex-responses"`.
+
 You can also override config values with environment variables:
 
 - `PI_ANYROUTER_CC_CONFIG`
@@ -154,6 +169,7 @@ Choose a configured model, for example:
 
 - `anyrouter / claude-opus-4-8`
 - `anyrouter / gpt-5.6-sol`
+- `anyrouter / gpt-6-astra-cc-format`
 
 Or run directly:
 

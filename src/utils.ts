@@ -97,8 +97,13 @@ export function resetOutputState(output: AssistantMessage) {
   output.responseId = undefined;
 }
 
+// AnyRouter's `*-cc-format` routes speak the Anthropic/Claude Code
+// messages protocol even when the model id starts with `gpt`.
+const CLAUDE_CODE_FORMAT_MODEL_RE = /(?:^|[-_.])cc[-_.]format(?:[-_.]|$)/i;
+
 export function isCodexModel(modelId: string, configuredApi?: string) {
   if (configuredApi) return configuredApi === "openai-codex-responses";
+  if (CLAUDE_CODE_FORMAT_MODEL_RE.test(modelId)) return false;
   return /(?:^|[-_.])(gpt|codex)(?:[-_.]|$)/i.test(modelId) || /^o\d(?:[-_.]|$)/i.test(modelId);
 }
 
